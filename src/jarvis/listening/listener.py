@@ -1096,13 +1096,26 @@ class VoiceListener(threading.Thread):
                 print(f"\n  ❌ Reply engine error: {exc}", flush=True)
                 debug_log(f'Reply engine exception: {exc}', 'voice')
                 failed = True
-                reply = 'Sorry, I encountered an error processing your request.'
+                reply = 'Deu ruim aqui do meu lado, não consegui processar isso.'
+                try:
+                    from jarvis import kadu_ponte
+                    kadu_ponte.publicar(reply, 'erro')
+                except Exception:
+                    pass
 
             self._stop_thinking_tune()
             if not self._transcription_is_current(generation):
                 debug_log('Discarded voice reply after generation invalidation', 'voice')
                 return
-            if reply and self.tts is not None and self.tts.enabled:
+            try:
+                from jarvis import kadu_ponte as _kp
+                _voz = _kp.voz_ligada()
+            except Exception:
+                _voz = True
+            if reply and not _voz and not failed:
+                # Kadu no modo "só balão": a resposta aparece escrita; a conversa segue aberta.
+                on_complete()
+            if reply and _voz and self.tts is not None and self.tts.enabled:
                 debug_log(f'Queueing voice output ({len(reply)} chars)', 'voice')
                 self.tts.speak(reply, completion_callback=None if failed else on_complete,
                                terminal_callback=release_query)
@@ -2579,11 +2592,16 @@ class VoiceListener(threading.Thread):
     def _decode_faster_whisper_locked(self, audio):
         """Consume lazy segments before releasing the shared model lock."""
         cpu_mode = self._whisper_device == "cpu"
+        # Kadu: idioma fixo em português (não gasta tempo detectando o idioma e não confunde
+        # com espanhol/inglês), busca gulosa no CPU (2 a 3x mais rápida) e uma dica com o nome
+        # dele para o reconhecimento escrever "Kadu" em vez de "Cadê"/"Caro".
         segments, info = self.model.transcribe(
-            audio, language=None, vad_filter=True,
+            audio, language="pt", vad_filter=True,
             no_speech_threshold=self.cfg.whisper_no_speech_threshold,
             condition_on_previous_text=False,
             without_timestamps=cpu_mode,
+            beam_size=1 if cpu_mode else 5,
+            initial_prompt="Conversa em português do Brasil com o Kadu.",
         )
         decoded = list(segments)
         if not decoded:

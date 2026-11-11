@@ -69,7 +69,13 @@ from jarvis.config import get_config_path, _default_db_path, get_model_recommend
 from desktop_app.diary_dialog import DiaryUpdateDialog
 from desktop_app.themes import JARVIS_THEME_STYLESHEET, COLORS, apply_theme
 from desktop_app.log_output import LogStream, clean_log, parse_progress
-from desktop_app.face_widget import FaceWindow
+try:  # Kadu de verdade: a página aprovada numa janela transparente (precisa do PyQt6-WebEngine)
+    from desktop_app.kadu_web import WEB_OK as _KADU_WEB_OK, KaduWindow as FaceWindow
+    if not _KADU_WEB_OK:
+        raise ImportError("WebEngine indisponível")
+except Exception:  # sem o motor de página, volta para o Kadu desenhado em Qt
+    _KADU_WEB_OK = False
+    from desktop_app.kadu_widget import KaduWindow as FaceWindow  # Kadu no lugar do rosto do Jarvis
 
 
 _LOG_SEPARATOR = "─" * 50
@@ -1862,6 +1868,19 @@ class JarvisSystemTray:
         # Create context menu
         self.create_menu()
         self.face_window.set_tray_menu(self.menu)
+        self.face_window.enviar_falar = self._kadu_falar
+        if _KADU_WEB_OK:
+            fw = self.face_window
+            fw.enviar_pergunta = self._kadu_perguntar
+            fw.alternar_mic = self.toggle_voice_pause
+            fw.pedir_ouvir = self._kadu_ouvir
+            fw.ao_sair = self.quit_app
+            fw.reiniciar_assistente = self._kadu_reiniciar
+            fw.definir_icone_bandeja = self._kadu_icone
+            self.log_signals.new_log.connect(fw.log_linha)
+            # o ícone da bandeja vira o mini Kadu: clique = mostra/esconde, botão direito = menu do Kadu
+            self.tray_icon.setContextMenu(None)
+            self.tray_icon.activated.connect(self._kadu_bandeja)
 
         # Set up status checking timer
         self.status_timer = QTimer()
@@ -1953,7 +1972,7 @@ class JarvisSystemTray:
         self.menu.addAction(self.chat_action)
 
         # Face window action
-        self.face_action = QAction("👤 Show Face")
+        self.face_action = QAction("🐰 Mostrar Kadu")
         self.face_action.triggered.connect(self.show_face_window)
         self.menu.addAction(self.face_action)
 
@@ -2241,9 +2260,10 @@ class JarvisSystemTray:
         launch windows are opened here explicitly instead of inside
         start_daemon.
         """
-        self.log_viewer.show()
-        self.log_viewer.raise_()
-        self.log_viewer.activateWindow()
+        if not _KADU_WEB_OK:  # com o Kadu novo o log fica no diário técnico dele (e em Mais opções)
+            self.log_viewer.show()
+            self.log_viewer.raise_()
+            self.log_viewer.activateWindow()
         self.face_window.show()
         self.face_window.raise_()
 
@@ -2416,6 +2436,9 @@ class JarvisSystemTray:
 
     def update_icon(self) -> None:
         """Update the tray icon based on current state."""
+        if getattr(self, "_kadu_icone_atual", None) is not None:
+            self.tray_icon.setIcon(self._kadu_icone_atual)
+            return
         if self.is_listening:
             icon_name = "icon_listening.png"
         else:
@@ -2486,6 +2509,58 @@ class JarvisSystemTray:
                 self.status_action.setText("⚪ Status: Stopped")
         self.voice_pause_action.setEnabled(active and self._voice_pause_request_id is None)
 
+    def _kadu_falar(self, texto: str) -> None:
+        """Pede ao assistente para falar uma frase do Kadu (comentários, lembretes, reações)."""
+        import json
+        try:
+            if self.is_bundled:
+                from jarvis.daemon import kadu_falar
+                kadu_falar(texto)
+            elif self.daemon_process is not None and self.daemon_process.stdin:
+                from jarvis.kadu_ponte import FALAR_IPC_PREFIX
+                self.daemon_process.stdin.write(FALAR_IPC_PREFIX + json.dumps({"texto": texto}) + "\n")
+                self.daemon_process.stdin.flush()
+        except Exception as exc:
+            debug_log(f"kadu: não conseguiu pedir fala ({type(exc).__name__})", "desktop")
+
+    # ------------------------------------------------------------ Kadu (página)
+    def _kadu_perguntar(self, texto: str) -> bool:
+        """Pergunta digitada na barra do Kadu: vai pelo mesmo caminho do chat."""
+        if not self.is_listening or self._chat_submit_fn is None:
+            return False
+        self._chat_submit_fn(texto)
+        return True
+
+    def _kadu_ouvir(self) -> None:
+        """Botão de microfone da barra: abre a escuta sem precisar dizer "Kadu"."""
+        try:
+            if self.is_bundled:
+                from jarvis.daemon import kadu_ouvir
+                kadu_ouvir()
+            elif self.daemon_process is not None and self.daemon_process.stdin:
+                from jarvis.kadu_ponte import OUVIR_IPC_PREFIX
+                self.daemon_process.stdin.write(OUVIR_IPC_PREFIX + "\n")
+                self.daemon_process.stdin.flush()
+        except Exception as exc:
+            debug_log(f"kadu: não conseguiu abrir a escuta ({type(exc).__name__})", "desktop")
+
+    def _kadu_reiniciar(self) -> None:
+        if self.is_listening:
+            self.stop_daemon(show_diary_dialog=False)
+        QTimer.singleShot(500, self.start_daemon)
+
+    def _kadu_icone(self, icone) -> None:
+        self._kadu_icone_atual = icone
+        self.tray_icon.setIcon(icone)
+
+    def _kadu_bandeja(self, motivo) -> None:
+        R = QSystemTrayIcon.ActivationReason
+        if motivo == R.Trigger:
+            self.face_window.alternar()
+        elif motivo == R.Context:
+            from PyQt6.QtGui import QCursor
+            self.face_window.menu_bandeja(QCursor.pos())
+
     def toggle_voice_pause(self) -> None:
         import json
         import uuid
@@ -2544,6 +2619,8 @@ class JarvisSystemTray:
         self._voice_pause_timer.stop()
         self._voice_pause_request_id = None
         self._voice_pause_state = status['paused']
+        if _KADU_WEB_OK and hasattr(getattr(self, 'face_window', None), 'definir_mic'):
+            self.face_window.definir_mic(bool(status['paused']))
         self.voice_pause_action.setText("▶️ Resume Voice Listening" if status['paused'] else "⏸️ Pause Voice Listening")
         self.voice_pause_action.setEnabled(True)
         self.status_action.setText("🟠 Status: Voice paused (chat available)" if status['paused'] else "🟢 Status: Listening")
@@ -2598,6 +2675,8 @@ class JarvisSystemTray:
         self._daemon_stuck = False
         self._daemon_stop_expected = False
         self._set_chat_daemon_status("starting")
+        if _KADU_WEB_OK and hasattr(getattr(self, 'face_window', None), 'daemon_iniciando'):
+            self.face_window.daemon_iniciando()
         try:
             if self.is_bundled:
                 # When bundled, run daemon in a QThread since Qt components may be used
@@ -2774,6 +2853,8 @@ class JarvisSystemTray:
             self.update_icon()
             self._set_chat_daemon_status("crashed")
             self._set_face_asleep()
+            if _KADU_WEB_OK and hasattr(getattr(self, 'face_window', None), 'daemon_parou'):
+                self.face_window.daemon_parou(True)
 
     def _read_daemon_logs(self) -> None:
         """Read logs from daemon subprocess in a background thread."""
@@ -2816,6 +2897,8 @@ class JarvisSystemTray:
         Creates the chat window lazily (safe on the GUI thread) and forwards
         the line to ``ChatWindow.process_ipc_line`` for parsing + signal emit.
         """
+        if _KADU_WEB_OK and hasattr(getattr(self, 'face_window', None), 'chat_evento'):
+            self.face_window.chat_evento(line)
         if self.chat_window is None:
             from desktop_app.chat_window import ChatWindow
             self.chat_window = ChatWindow(

@@ -507,6 +507,56 @@ def submit_text_query(
         _notify_chat("complete", None, callbacks=callbacks, use_ipc=use_ipc)
 
 
+def kadu_falar(texto: str) -> bool:
+    """Fala uma frase do Kadu pela mesma voz das respostas (com o filtro de eco do ouvido)."""
+    voice = _global_voice_listener
+    tts = getattr(voice, "tts", None) if voice is not None else None
+    if not texto or tts is None or not getattr(tts, "enabled", False):
+        return False
+    try:
+        tts.speak(texto)
+        return True
+    except Exception as exc:
+        debug_log(f"kadu: falha ao falar ({type(exc).__name__})", "voice")
+        return False
+
+
+def kadu_ouvir() -> bool:
+    """Abre a janela de escuta (como depois de uma resposta) para falar sem dizer "Kadu"."""
+    voice = _global_voice_listener
+    sm = getattr(voice, "state_manager", None) if voice is not None else None
+    if sm is None:
+        return False
+    try:
+        sm.schedule_hot_window_activation(False)
+        return True
+    except Exception as exc:
+        debug_log(f"kadu: falha ao abrir a escuta ({type(exc).__name__})", "voice")
+        return False
+
+
+def handle_kadu_ouvir_stdin_line(line: str) -> bool:
+    from .kadu_ponte import OUVIR_IPC_PREFIX
+    if line.strip() != OUVIR_IPC_PREFIX:
+        return False
+    kadu_ouvir()
+    return True
+
+
+def handle_kadu_falar_stdin_line(line: str) -> bool:
+    from .kadu_ponte import FALAR_IPC_PREFIX
+    if not line.startswith(FALAR_IPC_PREFIX):
+        return False
+    import json
+    try:
+        dados = json.loads(line[len(FALAR_IPC_PREFIX):])
+        texto = str(dados.get("texto", ""))[:400]
+        kadu_falar(texto)
+    except Exception as exc:
+        debug_log(f"kadu: pedido de fala inválido ({type(exc).__name__})", "voice")
+    return True
+
+
 def handle_chat_query_stdin_line(line: str) -> bool:
     """Parse a stdin line as a chat-query submission (subprocess mode).
 
@@ -1230,6 +1280,10 @@ def _run_daemon(smoke_test: bool = False) -> None:
                 # Chat query-in (subprocess mode). Returns False for any other
                 # line, which we silently ignore.
                 if handle_voice_pause_stdin_line(stripped):
+                    continue
+                if handle_kadu_falar_stdin_line(stripped):
+                    continue
+                if handle_kadu_ouvir_stdin_line(stripped):
                     continue
                 if handle_chat_cancel_stdin_line(stripped):
                     continue

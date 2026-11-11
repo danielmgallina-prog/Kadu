@@ -14,6 +14,9 @@ import os
 os.environ.setdefault('OPENBLAS_NUM_THREADS', '1')
 os.environ.setdefault('MKL_NUM_THREADS', '1')
 os.environ.setdefault('OMP_NUM_THREADS', '1')
+# Kadu: a biblioteca Fortran da Intel (vem junto com bibliotecas de áudio/matemática) derruba o
+# processo inteiro quando o Windows manda um evento de console; com isto ela deixa o Python cuidar.
+os.environ.setdefault('FOR_DISABLE_CONSOLE_CTRL_HANDLER', '1')
 
 # Validate the shared runtime requirement before importing desktop dependencies.
 import jarvis

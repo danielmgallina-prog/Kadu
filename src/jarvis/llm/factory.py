@@ -60,7 +60,11 @@ def get_llm_backend(settings: Any) -> LLMBackend:
     else:
         base_url = _str_attr(settings, "ollama_base_url", _DEFAULT_OLLAMA_URL)
     api_key = _str_attr(settings, "llm_api_key") or None
-    return _build(provider, base_url, api_key)
+    backend = _build(provider, base_url, api_key)
+    if provider == _OPENAI_COMPATIBLE:
+        # Kadu: modelo reserva para quando o principal estiver sobrecarregado.
+        backend.modelo_reserva = _str_attr(settings, "fast_model") or None
+    return backend
 
 
 def get_embedding_backend(settings: Any) -> LLMBackend:

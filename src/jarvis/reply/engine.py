@@ -73,6 +73,7 @@ import uuid
 from datetime import datetime, timezone
 from ..utils.location import get_location_context_with_timezone
 from ..utils.time_context import format_time_context
+from .. import kadu_ponte
 
 if TYPE_CHECKING:
     from ..memory.db import Database
@@ -1006,6 +1007,27 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     """
     if cancel_event is not None and cancel_event.is_set():
         return None
+    # o diário do Kadu mostra o que você perguntou (por voz ou digitando)
+    kadu_ponte.publicar(text, "neutro", "usuario")
+    # respostas especiais do Kadu (ex.: a Linda) saem na hora, sem chamar o modelo
+    _kadu_especial = kadu_ponte.resposta_especial(text)
+    if _kadu_especial:
+        _resp, _emo = _kadu_especial
+        kadu_ponte.publicar(_resp, _emo, "chat" if quiet else "resposta")
+        if not quiet:
+            try:
+                print(f"\n🤖 Jarvis\n  {_resp}\n", flush=True)
+            except Exception:
+                pass
+            if tts is not None and getattr(tts, "enabled", False) and kadu_ponte.voz_ligada():
+                tts.speak(_resp)
+        if dialogue_memory is not None:
+            try:
+                dialogue_memory.add_message("user", text)
+                dialogue_memory.add_message("assistant", _resp)
+            except Exception as e:
+                debug_log(f"dialogue memory error: {e}", "memory")
+        return _resp
 
     def preparation_cancelled(stage: str) -> bool:
         if cancel_event is not None and cancel_event.is_set():
@@ -1720,11 +1742,10 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         # Both current TTS engines (Piper, Chatterbox) only support English.
         # Responding in another language would produce garbled audio.
         # Remove this constraint when a multilingual TTS engine is added.
-        tts_engine = getattr(cfg, 'tts_engine', 'piper')
-        if tts_engine in ('piper', 'chatterbox'):
-            guidance.append(
-                "Always respond in English regardless of the language the user speaks in."
-            )
+        # Kadu: a voz Piper instalada é pt_BR, então a resposta é sempre em português.
+        guidance.append(
+            "Responda sempre em português do Brasil, começando com a marcação [emo:NOME]."
+        )
 
         if transcript_context:
             guidance.append(transcript_context)
@@ -2863,8 +2884,9 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             )
             reply = last_candidate_reply
     if not reply or not reply.strip():
-        reply = "Sorry, I had trouble processing that. Could you try again?"
+        reply = "Opa, me enrolei aqui e não consegui responder. Tenta de novo?"
         debug_log("no reply generated, returning error message", "planning")
+        kadu_ponte.publicar(reply, "erro")
 
         # Print error message
         try:
@@ -2888,10 +2910,14 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     # Step 10: Output and memory update
     if cancel_event is not None and cancel_event.is_set():
         return None
+    # Kadu: separa a marcação de emoção; voz, memória e chat recebem só o texto.
+    reply, _kadu_emocao = kadu_ponte.extrair(reply)
     safe_reply = reply.strip()
     if not safe_reply:
-        safe_reply = "Sorry, I had trouble processing that. Could you try again?"
+        safe_reply = "Opa, me enrolei aqui e não consegui responder. Tenta de novo?"
         reply = safe_reply
+        _kadu_emocao = "erro"
+    kadu_ponte.publicar(safe_reply, _kadu_emocao, "chat" if quiet else "resposta")
     if safe_reply:
         # Quiet callers own delivery and activity logging of the reply.
         try:
@@ -2903,7 +2929,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             debug_log(f"reply formatting failed: {e}", "planning")
 
         # TTS output - callbacks handled by calling code
-        if tts is not None and tts.enabled:
+        if tts is not None and tts.enabled and kadu_ponte.voz_ligada():
             tts.speak(safe_reply)
 
     # Step 11: Add to dialogue memory

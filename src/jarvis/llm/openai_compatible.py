@@ -117,6 +117,42 @@ class OpenAICompatibleBackend(LLMBackend):
             headers["Authorization"] = f"Bearer {self._api_key}"
         return headers
 
+    # ── Kadu: nova tentativa e modelo reserva ──────────────────────────
+    # O plano gratuito do Gemini às vezes responde 503 (servidor ocupado) ou 429 (limite por
+    # minuto). Em vez de desistir: tenta de novo uma vez e, se continuar, usa o modelo reserva
+    # (o modelo rápido configurado), que costuma ter mais folga.
+    modelo_reserva: Optional[str] = None
+    _STATUS_TEMPORARIO = {429, 500, 502, 503, 504}
+
+    def _post_chat_com_reserva(self, payload: Dict[str, Any], timeout_sec: float):
+        import time as _time
+        tentativas = [payload["model"], payload["model"]]
+        reserva = self.modelo_reserva
+        if reserva and reserva != payload["model"]:
+            tentativas.append(reserva)
+        ultimo_erro = None
+        for n, modelo in enumerate(tentativas):
+            corpo = dict(payload, model=modelo)
+            with http.post(
+                f"{self._base_url}/chat/completions",
+                json=corpo,
+                headers=self._headers(),
+                timeout=timeout_sec,
+            ) as resp:
+                status = getattr(resp, "status_code", 200)
+                if status in self._STATUS_TEMPORARIO and n < len(tentativas) - 1:
+                    proximo = tentativas[n + 1]
+                    print(f"  🔁 Gemini ocupado (status {status}); tentando de novo"
+                          + (f" com {proximo}" if proximo != modelo else ""), flush=True)
+                    ultimo_erro = status
+                    _time.sleep(0.8 if proximo == modelo else 0.3)
+                    continue
+                resp.raise_for_status()
+                if n > 0 and ultimo_erro:
+                    debug_log(f"chat recuperado na tentativa {n + 1} ({modelo})", "llm")
+                return resp.json()
+        return None
+
     # ── chat ───────────────────────────────────────────────────────────
 
     def direct(
@@ -150,14 +186,7 @@ class OpenAICompatibleBackend(LLMBackend):
             payload["max_tokens"] = max_tokens
 
         try:
-            with http.post(
-                f"{self._base_url}/chat/completions",
-                json=payload,
-                headers=self._headers(),
-                timeout=timeout_sec,
-            ) as resp:
-                resp.raise_for_status()
-                data = resp.json()
+            data = self._post_chat_com_reserva(payload, timeout_sec)
 
             normalised = _normalise_response(data) if isinstance(data, dict) else None
             if normalised:
@@ -325,14 +354,7 @@ class OpenAICompatibleBackend(LLMBackend):
             payload["tools"] = tools
 
         try:
-            with http.post(
-                f"{self._base_url}/chat/completions",
-                json=payload,
-                headers=self._headers(),
-                timeout=timeout_sec,
-            ) as resp:
-                resp.raise_for_status()
-                data = resp.json()
+            data = self._post_chat_com_reserva(payload, timeout_sec)
             if isinstance(data, dict):
                 return _normalise_response(data)
         except requests.exceptions.Timeout:
