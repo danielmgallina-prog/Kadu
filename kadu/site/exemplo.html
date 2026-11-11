@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Exemplo: Kadu no site</title>
+<style>
+  body{margin:0;font:16px/1.6 system-ui,"Segoe UI",sans-serif;background:#0E1A2B;color:#E6EEF8}
+  section{min-height:80vh;padding:64px max(16px,8vw);border-bottom:1px dashed #2B4566}
+  h1,h2{margin:0 0 12px}
+  .botoes{display:flex;flex-wrap:wrap;gap:8px;margin-top:20px}
+  button{font:inherit;padding:8px 14px;border-radius:10px;border:1px solid #3B6EA8;background:#14263D;color:#E6EEF8;cursor:pointer}
+  .card{display:inline-block;margin:8px 8px 0 0;padding:18px 22px;border:1px solid #3B6EA8;border-radius:12px}
+</style>
+</head>
+<body>
+
+<section>
+  <h1>DEGÊ.</h1>
+  <p>Página de exemplo. O Kadu aparece no canto: passe o mouse, clique, arraste, esfregue o mouse na cabeça dele.</p>
+  <div class="botoes">
+    <button onclick="Kadu.falar('Olha só, eu falo o que você quiser!', 'animado')">Kadu.falar()</button>
+    <button onclick="Kadu.expressao('apaixonado')">expressão: apaixonado</button>
+    <button onclick="Kadu.expressao('surpreso')">expressão: surpreso</button>
+    <button onclick="Kadu.expressao('ideia', 3000)">expressão: ideia</button>
+    <button onclick="Kadu.pular()">Kadu.pular()</button>
+    <button onclick="Kadu.alternar()">mostrar / esconder</button>
+    <button onclick="Kadu.expressoes().then(l => alert(l.join(', ')))">listar expressões</button>
+  </div>
+</section>
+
+<section data-kadu-fala="Esses são os projetos! Passa o mouse neles." data-kadu-emo="animado">
+  <h2>Projetos</h2>
+  <div class="card" data-kadu-olhar data-kadu-emo="encantado">Projeto 1 (ele olha para cá)</div>
+  <div class="card" data-kadu-olhar data-kadu-emo="pesquisando">Projeto 2</div>
+  <div class="card" data-kadu-olhar>Projeto 3</div>
+</section>
+
+<section data-kadu-fala="Quer falar com o DG? É por aqui!" data-kadu-emo="feliz">
+  <h2>Contato</h2>
+  <p>Fim da página de exemplo.</p>
+</section>
+
+<script src="kadu-embed.js" data-src="kadu.html" defer></script>
+</body>
+</html>

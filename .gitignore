@@ -26,3 +26,9 @@ src/jarvis/_version.py
 
 # Public site build output
 _site/
+
+# Kadu
+config.json
+*.env
+kadu.json
+kadu_diario.json
